@@ -24,3 +24,4 @@ Can be downloaded here: https://share-good.egid.fr/fop/VZfxQvAD/TD_GWAS_data.zip
 * 1,000 genomes population: `20100804.ALL.panel` (ftp://ftp-trace.ncbi.nih.gov/1000genomes/ftp/release/20100804/20100804.ALL.panel)
 * 1,000 genomes population and super-population: `integrated_call_samples_v3.20130502.ALL.panel` (ftp://ftp-trace.ncbi.nih.gov/1000genomes/ftp/release/20130502/integrated_call_samples_v3.20130502.ALL.panel)
 * Temporary file for figures: `figs/`
+* TD supports: `TD_GWAS.Rmd` and `TD_GWAS.html`
