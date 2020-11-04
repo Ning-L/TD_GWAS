@@ -1,0 +1,714 @@
+---
+title: "TD GWAS - Practical Session"
+date: "2020-11-06"
+author: "Lijiao Ning"
+output: 
+  html_document: 
+    toc: true
+    toc_depth: 3
+    toc_float: 
+      collapsed: false
+    fig_width: 6.3
+    fig_height: 4.7
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+## load packages
+library(dplyr)
+library(tidyr)
+library(scales)
+# library(data.table)
+library(ggplot2)
+theme_set(theme_light())
+
+## source functions
+source("viz_functions.R") # R functions for visualization
+
+```
+
+# About The Data
+
+This practical session uses a subset of the freely [HapMap](https://www.sanger.ac.uk/resources/downloads/human/hapmap3.html) data. The original HapMap data can be found here: ftp://ftp.ncbi.nlm.nih.gov/hapmap/genotypes/2010-05_phaseIII/plink_format/. 
+
+In order to create a homogeneous ethnic population and to speed up the data processing steps, only European samples (the CEU population) were selected. 
+
+A binary trait was simulated only for founders and was added to the dataset. 
+
+We refer hereafter this dataset as "hapmap_ceu".
+
+~~~
+### build a directory for this TD
+mkdir TD_GWAS
+cd TD_GWAS
+
+### download PLINK 1.9
+wget http://s3.amazonaws.com/plink1-assets/plink_linux_x86_64_20201019.zip
+unzip plink_linux_x86_64_20201019.zip
+rm plink_linux_x86_64_20201019.zip prettify LICENSE
+
+### download "hapmap_ceu" data and Rmardown file here
+wget https://share-good.egid.fr/fop/VZfxQvAD/TD_GWAS_data.zip
+unzip TD_GWAS_data.zip
+rm TD_GWAS_data.zip
+~~~
+
+Before start, please change directory to the folder containing files `hapmap_ceu.bim`, `hapmap_ceu.bed` and `hapmap_ceu.fam`. Make sure this Rmarkdown file is in the same directory as `hapmap_ceu.bim`.
+
+# Describing Data
+
+~~~
+wc -l hapmap_ceu.bim
+~~~
+
+```{r}
+fam <- data.table::fread("hapmap_ceu.fam", header = FALSE)
+table("sex" = fam$V5, "status" = fam$V6)
+```
+
+**Quiz** 
+
+* How many SNPs?
+* How many individuals? How many males/females? How many cases/controls?
+
+([clue](https://www.cog-genomics.org/plink/2.0/formats))
+
+# Quality Control
+
+## Sample-based QC
+
+### Sample Call Rate
+
+~~~
+./plink --bfile hapmap_ceu --missing --out hapmap_ceu
+~~~
+
+```{r sample-cr}
+sample_callrate_thres <- 0.99
+
+sample_miss <- data.table::fread(
+  file = "hapmap_ceu.imiss", 
+  header = TRUE
+) %>% 
+  mutate(
+    call_rate = 1 - F_MISS, 
+    lab = ifelse(call_rate < sample_callrate_thres, IID, NA)
+  )
+
+arrange(sample_miss, call_rate) %>% 
+  ggplot(aes(x = seq_along(IID), y = call_rate)) +
+  geom_point(shape = 21) +
+  geom_hline(yintercept = sample_callrate_thres, color = "blue", linetype = 2) +
+  geom_text(aes(label = lab), size = 3, hjust = -0.2, na.rm = TRUE) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
+  labs(x = "Samples", y = "Call Rate", title = "Sample Call Rate Check")
+# ggsave(filename = "figs/sample_cr.png", dpi = 200, height = 4.7, width = 6.3)
+
+sample_to_exclude <- list(
+  "sample_cr" = filter(sample_miss, !is.na(lab)) %>% 
+    select(FID, IID) %>% 
+    mutate(QC = "Call rate")
+)
+```
+
+**Quiz** 
+
+* What's the possible reason when samples have a lot of missing genotypes?
+
+### Heterozygosity Check
+
+~~~
+./plink --bfile hapmap_ceu --het --out hapmap_ceu
+~~~
+
+```{r sample-het}
+het_check <- data.table::fread(
+  file = "hapmap_ceu.het", 
+  header = TRUE, 
+  col.names = c("FID", "IID", "Ob_Hom", "Exp_Hom", "N_NM", "F_coef")
+) %>% 
+  mutate(het_rate = (N_NM - Ob_Hom) / N_NM)
+
+het_sd_thres <- 3
+het_upper <- mean(het_check$het_rate) + sd(het_check$het_rate) * het_sd_thres
+het_lower <- mean(het_check$het_rate) - sd(het_check$het_rate) * het_sd_thres
+
+inner_join(
+  x = sample_miss,
+  y = het_check, 
+  by = "IID"
+) %>% 
+  mutate(
+    lab = ifelse(het_rate > het_upper | het_rate < het_lower, IID, NA)
+  ) %>% 
+  ggplot(aes(x = het_rate, y = call_rate)) +
+  geom_point(shape = 21) +
+  geom_text(
+    aes(label = lab), size = 3, hjust = -0.2, 
+    na.rm = TRUE, show.legend = FALSE
+  ) +
+  geom_vline(
+    xintercept = c(het_upper, het_lower), 
+    linetype = 2, 
+    color = "blue"
+  ) +
+  scale_x_continuous(labels = scales::percent_format(accuracy = 0.1)) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
+  labs(x = "Heterozygosity Rate", y = "Call Rate", title = "Heterozygosity Check")
+# ggsave(filename = "figs/sample_hrate.png", dpi = 200, height = 4.7, width = 6.3)
+
+sample_to_exclude[["sample_het"]] <- filter(
+  het_check, het_rate > het_upper | het_rate < het_lower
+) %>% 
+  select(FID, IID) %>% 
+  mutate(QC = "Heterozygosity")
+
+```
+
+### Gender Check
+
+~~~
+./plink --bfile hapmap_ceu --check-sex --out hapmap_ceu
+~~~
+
+```{r sample-gender}
+gender_check <- data.table::fread(
+  file = "hapmap_ceu.sexcheck", 
+  header = TRUE
+)
+
+inner_join(
+  x = sample_miss,
+  y = gender_check, 
+  by = "IID"
+) %>% 
+  mutate(
+    lab = ifelse(STATUS != "OK", IID, NA), 
+    PEDSEX = ifelse(PEDSEX == 1, "Male", ifelse(PEDSEX == 2, "Female", NA))
+  ) %>% 
+  ggplot(aes(x = `F`, y = call_rate, color = PEDSEX)) +
+  geom_point(shape = 21) +
+  geom_text(aes(label = lab), size = 3, hjust = 1.2, na.rm = TRUE, show.legend = FALSE) +
+  geom_vline(xintercept = c(0.2, 0.8), linetype = 2) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2)) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
+  labs(x = "Homozygosity Rate", y = "Call Rate", title = "Gender Check")
+# ggsave(filename = "figs/sample_gender.png", dpi = 200, height = 4.7, width = 6.3)
+
+sample_to_exclude[["gender_dis"]] <- filter(gender_check, STATUS != "OK") %>% 
+  select(FID, IID) %>% 
+  mutate(QC = "Gender discrepancy")
+```
+
+**Quiz** 
+
+* What's the possible reasons when a gender discrepancy is observed?
+
+### Relatedness Check
+
+~~~
+## prune high ld regions
+./plink --bfile hapmap_ceu --autosome --set-hh-missing --maf 0.01 --r2 --ld-window-r2 0.2 --ld-window-kb 50 --make-bed --out hapmap_ceu_pruned
+
+## make sure allelic frequency is representative after pruning
+./plink --bfile hapmap_ceu_pruned --freq --make-bed --out hapmap_ceu_pruned
+
+## estimate IBD
+./plink --bfile hapmap_ceu_pruned --read-freq hapmap_ceu_pruned.frq --genome --min 0.2 --out hapmap_ceu_pruned_0
+~~~
+
+```{r sample-relatedness-0}
+relatedness0 <- data.table::fread(
+  file = "hapmap_ceu_pruned_0.genome", 
+  header = TRUE
+) 
+
+data.frame(table(cut(
+  relatedness0[["PI_HAT"]],
+  breaks = c(0.2, 0.3, 0.4, 0.6, 0.8, 1),
+  include.lowest = TRUE
+))) %>%
+  `colnames<-`(c("IBD windows", "Pair count")) %>%
+  mutate(
+    `IBD windows` = paste0(
+      `IBD windows`,
+      c(" = Second degree relatives", "", " = First degree relatives", "", " = MZ twins/duplicates")
+    )
+  )
+
+```
+
+The HapMap dataset is known to contain parent-offspring relations. Let's check how many pairs with PI_HAT > 0.2 after removing non-founders.
+
+~~~
+## exclude individuals with know parental ID
+./plink --bfile hapmap_ceu_pruned --filter-founders --make-bed --out hapmap_ceu_pruned_1
+
+## update allelic frequency
+./plink --bfile hapmap_ceu_pruned_1 --freq --make-bed --out hapmap_ceu_pruned_1
+
+## estimate IBD
+./plink --bfile hapmap_ceu_pruned_1 --read-freq hapmap_ceu_pruned_1.frq --genome --min 0.2 --out hapmap_ceu_pruned_1
+~~~
+
+```{r sample-relatedness-1}
+relatedness1 <- data.table::fread(
+  file = "hapmap_ceu_pruned_1.genome", 
+  header = TRUE
+) 
+
+data.frame(table(cut(
+  relatedness1[["PI_HAT"]],
+  breaks = c(0.2, 0.3, 0.4, 0.6, 0.8, 1),
+  include.lowest = TRUE
+))) %>%
+  `colnames<-`(c("IBD windows", "Pair count")) %>%
+  mutate(
+    `IBD windows` = paste0(
+      `IBD windows`,
+      c(" = Second degree relatives", "", " = First degree relatives", "", " = MZ twins/duplicates")
+    )
+  ) 
+
+```
+
+We'll keep the individual with higher call rate for each pair of related samples.
+
+```{r sample-relatedness-2}
+related_samples <- select(relatedness1, FID1, IID1, FID2, IID2, PI_HAT) %>% 
+  left_join(
+    select(sample_miss, FID1 = FID, IID1 = IID, F_MISS1 = F_MISS),
+    by = c("FID1", "IID1")
+  ) %>% 
+  left_join(
+    select(sample_miss, FID2 = FID, IID2 = IID, F_MISS2 = F_MISS),
+    by = c("FID2", "IID2")
+  ) %>% 
+  mutate(
+    call_rate1 = 1 - F_MISS1, 
+    call_rate2 = 1 - F_MISS2
+  ) %>% 
+  arrange(desc(PI_HAT))
+
+select(related_samples, -contains("MISS"))
+
+sample_to_exclude[["sample_relatedness"]] <- filter(related_samples, PI_HAT > 0.2) %>% 
+  select(matches("FID|IID|call_rate")) %>% 
+  unite(col = FID_IID1, FID1, IID1, sep = "_-_") %>% 
+  unite(col = FID_IID2, FID2, IID2, sep = "_-_") %>% 
+  mutate(FID_IID = ifelse(call_rate1 >= call_rate2, FID_IID2, FID_IID1)) %>% 
+  separate(col = "FID_IID", into = c("FID", "IID"), sep = "_-_") %>% 
+  distinct(FID, IID) %>% 
+  mutate(QC = "Relatedness")
+
+```
+
+### Population Structure
+
+**[DO NOT RUN]**
+
+```{r sample-pop-1}
+## remove bad quality samples for PCA
+rbind(
+  sample_to_exclude[["sample_cr"]],
+  sample_to_exclude[["sample_to_exclude"]]
+) %>% 
+  distinct(FID, IID) %>% 
+  data.table::fwrite(
+    file = "samples_toexclude_pca.txt",
+    row.names = FALSE, 
+    col.names = FALSE, 
+    quote = FALSE
+  )
+
+```
+
+~~~
+## prune HapMap data for PCA
+./plink --bfile hapmap_ceu --remove samples_toexclude_pca.txt --autosome --snps-only --maf 0.01 --hwe 0.0001 --geno 0.1 --make-bed --out hapmap_ceu_pca
+~~~
+
+```{r sample-pop-2}
+## extract HapMap SNPs
+data.table::fwrite(
+  data.table::fread("hapmap_ceu_pca.bim", header = FALSE)[, "V2"], 
+  file = "hapmap_ceu_pca_snps.txt",
+  sep = "\n", 
+  row.names = FALSE, 
+  col.names = FALSE, 
+  quote = FALSE
+)
+
+```
+
+**Attention:** huge data with >60G, please do not download if your disk memory is not allowed, download time is about 2 hours.
+
+~~~
+## get 1kg data under build 36
+wget ftp://ftp-trace.ncbi.nih.gov/1000genomes/ftp/release/20100804/20100804.ALL.panel
+wget ftp://ftp-trace.ncbi.nih.gov/1000genomes/ftp/release/20100804/ALL.2of4intersection.20100804.genotypes.vcf.gz
+./plink --vcf ALL.2of4intersection.20100804.genotypes.vcf.gz --make-bed --out ALL.2of4intersection.20100804.genotypes
+./plink --bfile ALL.2of4intersection.20100804.genotypes --set-missing-var-ids @:#[b37]\$1,\$2 --make-bed --out ALL.2of4intersection.20100804.genotypes_no_missing_IDs
+./plink --bfile ALL.2of4intersection.20100804.genotypes_no_missing_IDs --extract hapmap_ceu_pca_snps.txt --snps-only --make-bed --out 1kg_small
+
+## QC 1kg data
+./plink --bfile 1kg_small --mind 0.1 --make-bed --out 1kg_small
+./plink --bfile 1kg_small --geno 0.1 --maf 0.01 --hwe 0.0001 --make-bed --out 1kg_small
+
+## extract 1kg variant from hapmap data
+awk '{print$2}' 1kg_small.bim > 1kg_pca_snps.txt
+./plink --bfile hapmap_ceu_pca --extract 1kg_pca_snps.txt --recode --make-bed --out hapmap_ceu_pca_1kg
+
+## keep same build
+awk '{print$2,$4}' hapmap_ceu_pca_1kg.map > hapmap_build.txt
+./plink --bfile 1kg_small --update-map hapmap_build.txt --make-bed --out 1kg_small_clean
+
+### merge
+## make sure reference allele is the same for variants
+awk '{print$2,$5}' 1kg_small_clean.bim > 1kg_ref-list.txt
+./plink --bfile hapmap_ceu_pca_1kg --reference-allele 1kg_ref-list.txt --make-bed --out hapmap_ceu_pca_1kg_adj
+
+## resolve strand issues
+./plink --bfile 1kg_small_clean --bmerge hapmap_ceu_pca_1kg_adj.bed hapmap_ceu_pca_1kg_adj.bim hapmap_ceu_pca_1kg_adj.fam --make-bed --out hapmap_1kg
+
+## error when matching, flip variant strand
+./plink --bfile 1kg_small_clean --flip hapmap_1kg-merge.missnp --make-bed --out 1kg_small_flipped
+
+## try to merge again
+./plink --bfile 1kg_small_flipped --bmerge hapmap_ceu_pca_1kg_adj.bed hapmap_ceu_pca_1kg_adj.bim hapmap_ceu_pca_1kg_adj.fam --make-bed --out hapmap_1kg
+
+## still error, exclude mis-matching variants in both datasets
+./plink --bfile 1kg_small_flipped --exclude hapmap_1kg-merge.missnp --make-bed --out 1kg_small_flipped_clean
+./plink --bfile hapmap_ceu_pca_1kg_adj --exclude hapmap_1kg-merge.missnp --make-bed --out hapmap_ceu_pca_1kg_adj_clean
+
+## merge 1kg with HapMap data
+./plink --bfile 1kg_small_flipped_clean --bmerge hapmap_ceu_pca_1kg_adj_clean.bed hapmap_ceu_pca_1kg_adj_clean.bim hapmap_ceu_pca_1kg_adj_clean.fam --make-bed --out hapmap_1kg
+~~~
+
+```{r sample-pop-3, eval=FALSE}
+### extract SNPs in common
+intersect(
+  data.table::fread("1kg_small_flipped_clean.bim", header = FALSE)[["V2"]],
+  data.table::fread("hapmap_ceu_pca_1kg_adj_clean.bim", header = FALSE)[["V2"]]
+) %>%
+  data.table::fwrite(
+    file = "hapmap_1kg_snps.txt",
+    col.names = FALSE, 
+    row.names = FALSE, 
+    quote = FALSE, 
+    sep = "\n"
+  )
+```
+
+~~~
+./plink --bfile hapmap_1kg --extract hapmap_1kg_snps.txt --make-bed --out hapmap_1kg
+~~~
+
+```{r sample-pop-4, eval=FALSE}
+### check palindromic variants
+data.table::fread("hapmap_1kg.bim", header = FALSE) %>%
+  unite(alleles, V5, V6, remove = FALSE, sep = "") %>%
+  filter(alleles %in% c("GC", "CG", "AT", "TA")) %>%
+  select(V2) %>%
+  data.table::fwrite(
+    file = "hapmap_1kg_palindromic.txt",
+    row.names = FALSE, 
+    col.names = FALSE, 
+    sep = "\n",
+    quote = FALSE
+  )
+
+```
+
+~~~
+### remove palindromic variants
+./plink --bfile hapmap_1kg --exclude hapmap_1kg_palindromic.txt --make-bed --out hapmap_1kg
+
+### run PCA
+./plink --bfile hapmap_1kg --make-grm-bin --pca 10 --thread-num 10 --out hapmap_1kg
+~~~
+
+After running PCA, you will get two files, one for the eigenvalues (`.eigenval`) and another for the eigenvectors (`.eigenvec`). These two files are prepared in advance, named `hapmap_1kg.eigenval` and `hapmap_1kg.eigenvec` (available in the data directory). Eigenvector contains the 10 first principal components. Now, let's visualize the population structure.
+
+**Quiz** 
+
+* Which 1,000 genomes population is the closest to HapMap population? What is your conclusion?
+
+```{r sample-pop-pca}
+pop <- data.table::fread("relationships_w_pops_041510.txt", header = TRUE)[population == "CEU", ]
+
+data_pca <- data.table::fread("hapmap_1kg.fam", header = FALSE) %>% 
+  select(IID = V2, pheno = V5) %>% 
+  left_join(
+    rbind(
+      select(pop, FID, IID) %>% mutate(population = "HapMap"), 
+      read.table("20100804.ALL.panel", header = FALSE, fill = TRUE) %>% 
+        select(FID = V1, IID = V1, population = V2)
+    ) %>% 
+      distinct(IID, .keep_all = TRUE), 
+    by = "IID"
+  ) %>% 
+  left_join(
+    data.table::fread("hapmap_1kg.eigenvec", header = FALSE), 
+    by = c("FID" = "V1", "IID" = "V2")
+  ) %>% 
+  left_join(
+    data.table::fread("integrated_call_samples_v3.20130502.ALL.panel", header = TRUE, fill = TRUE) %>% 
+      distinct(pop, super_pop), 
+    by = c("population" = "pop")
+  ) %>% 
+  mutate(
+    super_pop = ifelse(population == "HapMap", "HapMap", super_pop),
+    super_pop = relevel(factor(super_pop), ref = "HapMap")#,
+    # population = relevel(factor(population), ref = "HapMap")
+  ) %>% 
+  rename(x = V3, y = V4) %>% 
+  left_join(
+    y = stats::aggregate(cbind(x, y) ~ super_pop, data = ., mean) %>%
+      `colnames<-`(paste0(colnames(.), c("", ".centroid", ".centroid"))),
+    by = "super_pop"
+  ) %>%
+  mutate(dist = sqrt((x - x.centroid)^2 + (y - y.centroid)^2))
+
+centre_pca <- data_pca %>%
+  filter(super_pop != "HapMap") %>%
+  select(IID, super_pop, contains("centroid")) %>%
+  mutate_at(.vars = vars(IID, super_pop), .funs = as.character)
+
+check_ethnicity <- data.table::fread("hapmap_ceu_pca_1kg_adj_clean.fam", header = FALSE) %>%
+  select(FID = V1, IID = V2) %>%
+  mutate_all(as.character) %>%
+  left_join(
+    filter(data_pca, super_pop == "HapMap"),
+    by = c("FID", "IID")
+  ) %>%
+  rowwise() %>%
+  mutate(
+    ClosestPop = centre_pca[["super_pop"]][which.min(sqrt(
+      (x - centre_pca[["x.centroid"]])^2 + (y - centre_pca[["y.centroid"]])^2
+    ))]
+  ) %>% 
+  ungroup()
+
+inertia_pca <- data.table::fread("hapmap_1kg.eigenval", header = FALSE) %>%
+  mutate(y = V1 / sum(V1))
+
+ggplot(
+  data = data_pca, aes(x = x, y = y, color = super_pop)
+) +
+  geom_hline(yintercept = 0, linetype = 2) +
+  geom_vline(xintercept = 0, linetype = 2) +
+  geom_point(na.rm = TRUE, shape = 21) +
+  scale_color_viridis_d(direction = -1) +
+  labs(
+    x = "First Principal Component", 
+    y = "Second Principal Component", 
+    colour = NULL, 
+    title = "HapMap vs. 1,000 Genomes"
+  ) +
+  theme(
+    legend.position = "bottom", 
+    legend.key.size = unit(0.5, units = "lines")
+  )
+# ggsave(filename = "figs/pop_structure.png", dpi = 200, height = 4.7, width = 6.3)
+
+inertia_pca %>%
+  mutate(x = seq_along(V1)) %>%
+  ggplot(mapping = aes(x = x, y = y)) +
+  geom_bar(stat = "identity", fill = scales::viridis_pal(begin = 0.5, end = 0.5)(1)) +
+  labs(y = "Inertia", x = "Principal Components", title = "PCA Scree Plot") +
+  scale_x_continuous(breaks = seq_len(10)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05)))
+# ggsave(filename = "figs/pop_structure_inertia.png", dpi = 200, height = 4.7, width = 6.3)
+```
+
+```{r sample-exclusion}
+do.call("rbind", sample_to_exclude) %>% 
+  distinct(FID, IID) %>% 
+  data.table::fwrite(
+    file = "samples_excluded.txt",
+    sep = "\t", 
+    col.names = TRUE, 
+    row.names = FALSE,
+    quote = FALSE
+  )
+  
+```
+
+~~~
+## final sample-based plink
+./plink --bfile hapmap_ceu --filter-founders --remove samples_excluded.txt --snps-only --set-hh-missing --make-bed --out hapmap_ceu_good_samples
+~~~
+
+**Quiz**
+
+* How many samples were excluded? Do you think sample with gender discrepancy should be removed?
+
+## Variant-based QC
+
+### Variant Call Rate
+
+~~~
+./plink --bfile hapmap_ceu_good_samples --missing --out hapmap_ceu_good_samples
+~~~
+
+```{r variant-cr}
+variant_miss <- data.table::fread(
+  file = "hapmap_ceu_good_samples.lmiss", 
+  header = TRUE
+) %>% 
+  mutate(call_rate = 1 - F_MISS)
+
+variant_callrate_thres <- 0.95
+arrange(variant_miss, call_rate) %>% 
+  ggplot(aes(x = seq_along(SNP), y = call_rate)) +
+  geom_point(shape = 21) +
+  geom_hline(yintercept = variant_callrate_thres, color = "blue", linetype = 2) +
+  scale_x_continuous(labels = scales::comma_format()) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
+  labs(x = "Variants", y = "Call Rate", title = "Variant Call Rate Check") +
+  theme(axis.text.x = element_text(hjust = 1, angle = 10))
+# ggsave(filename = "figs/variant_cr.png", dpi = 200, height = 4.7, width = 6.3)
+
+```
+
+### Minor Allele Frequency Distribution
+
+~~~
+./plink --bfile hapmap_ceu_good_samples --freq --out hapmap_ceu_good_samples
+~~~
+
+```{r variant-maf}
+data.table::fread(
+  file = "hapmap_ceu_good_samples.frq", 
+  header = TRUE
+) %>% 
+  mutate(
+    maf_dist = cut(MAF, breaks = c(0, 0.01, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5), include.lowest = TRUE)
+  ) %>% 
+  drop_na(MAF) %>% 
+  ggplot(aes(x = maf_dist)) +
+  geom_bar(fill = scales::viridis_pal(begin = 0.5, end = 0.5)(1)) +
+  labs(x = "MAF", y = "Number of variants", title = "MAF Distribution") +
+  scale_y_continuous(labels = scales::comma_format(), expand = expansion(mult = c(0, 0.1)))
+# ggsave(filename = "figs/variant_maf.png", dpi = 200, height = 4.7, width = 6.3*1.2)
+
+```
+
+### Hardy-Weinberg Equilibrium
+
+~~~
+./plink --bfile hapmap_ceu_good_samples --hardy --out hapmap_ceu_good_samples
+~~~
+
+```{r variant-hwe}
+hwe <- data.table::fread(
+  file = "hapmap_ceu_good_samples.hwe", 
+  header = TRUE
+)
+
+hwe_p_thres <- 0.0001
+hwe_significant <- filter(hwe, TEST == "ALL", P < hwe_p_thres * 10) %>% 
+  arrange(P)
+ggplot(data = hwe_significant, aes(x = seq_along(SNP), y = P)) +
+  geom_point(shape = 21) +
+  geom_hline(yintercept = hwe_p_thres, linetype = 2, color = "blue") +
+  scale_y_continuous(trans = pval_trans()) +
+  labs(
+    x = "Variants", y = "HWE P-value", 
+    title = "HWE P-value Distribution", 
+    subtitle = paste0("(truncated at p < ", hwe_p_thres * 10, ")")
+  )
+# ggsave(filename = "figs/variant_hwe.png", dpi = 200, height = 4.7, width = 6.3)
+  
+```
+
+~~~
+## final data management at one time
+./plink --bfile hapmap_ceu \
+--filter-founders \
+--remove samples_excluded.txt \
+--snps-only \
+--set-hh-missing \
+--geno 0.05 \
+--hwe 0.0001 \
+--recode \
+--make-bed \
+--out hapmap_ceu_clean
+~~~
+
+# Association Test
+
+We will run association test only for chromosome 22 using logistic regression model.
+
+```{r eval=FALSE}
+## use the first 2 PCs as covariables
+left_join(
+  data.table::fread("hapmap_ceu_clean.fam", header = FALSE) %>% 
+    mutate(V1 = as.character(V1)) %>% 
+    select(V1, V2, sex = V5),
+  data.table::fread("hapmap_1kg.eigenvec", header = FALSE) %>% 
+    select(V1, V2, V3, V4), 
+  by = c("V1", "V2")
+) %>% 
+  rename(FID = V1, IID = V2, PC1 = V3, PC2 = V4) %>% 
+  data.table::fwrite(
+    file = "covars.txt", 
+    col.names = TRUE,
+    row.names = FALSE, 
+    sep = "\t", 
+    quote = FALSE
+  )
+
+```
+
+~~~
+### logistic regression with covariables
+./plink --bfile hapmap_ceu_clean --chr 22 --logistic --covar covars.txt --covar-name sex, PC1, PC2 --out res_glm_covar_chr22
+~~~
+
+```{r}
+res_glm_covar <- data.table::fread("res_glm_covar_chr22.assoc.logistic", header = TRUE)
+res_glm_covar
+
+res_glm_covar <- filter(res_glm_covar, TEST == "ADD", ! is.na(P))
+```
+
+# Visualization
+
+## Quantile-Quantile Plot
+
+```{r eval=FALSE}
+ggqqplot(res_glm_covar[, "P"])
+# ggsave(filename = "figs/qq_plot.png", dpi = 200, height = 4.7, width = 6.3)
+```
+
+![](figs/qq_plot.png)
+
+## Manhattan Plot
+
+```{r eval=FALSE}
+draw_manhattan(
+  data = res_glm_covar,
+  x = "BP",
+  y = "P",
+  chr = "CHR",
+  label_y = "P-Value",
+  alpha = 0.05
+)
+# ggsave(filename = "figs/manhattan_plot.png", dpi = 200, height = 4.7, width = 6.3*1.5)
+```
+
+![](figs/manhattan_plot.png)
+
+# R Session Information
+
+```{r session-info, echo=FALSE, results="markup"}
+options("width" = 110)
+sessioninfo::session_info()
+```
+
