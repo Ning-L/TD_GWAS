@@ -14,3 +14,13 @@ This directory contains course materials for TD GWAS.
 The toy data is a subset of the freely [HapMap](https://www.sanger.ac.uk/resources/downloads/human/hapmap3.html) data, containing only CEU samples, a binary trait was simulated for only founders.
 
 Can be downloaded here: https://share-good.egid.fr/fop/VZfxQvAD/TD_GWAS_data.zip
+
+* Raw HapMap CEU samples PLINK format data (build 36): `hapmap_ceu.bim`, `hapmap_ceu.bed`, `hapmap_ceu.fam`
+* PCA eigenvalues and eigenvector from PCA for population structure: `hapmap_1kg.eigenval`, `hapmap_1kg.eigenvec`
+* Covariables sex, PC1 and PC2: `covars.txt`
+* Logistic regression results: `res_glm_covar_chr22.assoc.logistic`
+* Some R functions for data visualization: `viz_functions.R`
+* HapMap sample population: `relationships_w_pops_041510.txt` (ftp://ftp-trace.ncbi.nih.gov/1000genomes/ftp/release/20100804/20100804.ALL.panel)
+* 1,000 genomes population: `20100804.ALL.panel` (ftp://ftp-trace.ncbi.nih.gov/1000genomes/ftp/release/20100804/20100804.ALL.panel)
+* 1,000 genomes population and super-population: `integrated_call_samples_v3.20130502.ALL.panel` (ftp://ftp-trace.ncbi.nih.gov/1000genomes/ftp/release/20130502/integrated_call_samples_v3.20130502.ALL.panel)
+* Temporary file for figures: `figs/`
