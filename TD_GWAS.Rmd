@@ -51,7 +51,10 @@ wget http://s3.amazonaws.com/plink1-assets/plink_linux_x86_64_20201019.zip
 unzip plink_linux_x86_64_20201019.zip
 rm plink_linux_x86_64_20201019.zip prettify LICENSE
 
-### download "hapmap_ceu" data and Rmardown file here
+## For Mac http://s3.amazonaws.com/plink1-assets/plink_mac_20201019.zip 
+## For Windows http://s3.amazonaws.com/plink1-assets/plink_win64_20201019.zip
+
+### download "hapmap_ceu" data and Rmardown file
 wget https://share-good.egid.fr/fop/VZfxQvAD/TD_GWAS_data.zip
 unzip TD_GWAS_data.zip
 rm TD_GWAS_data.zip
@@ -439,13 +442,14 @@ After running PCA, you will get two files, one for the eigenvalues (`.eigenval`)
 * Which 1,000 genomes population is the closest to HapMap population? What is your conclusion?
 
 ```{r sample-pop-pca}
-pop <- data.table::fread("relationships_w_pops_041510.txt", header = TRUE)[population == "CEU", ]
-
 data_pca <- data.table::fread("hapmap_1kg.fam", header = FALSE) %>% 
   select(IID = V2, pheno = V5) %>% 
   left_join(
     rbind(
-      select(pop, FID, IID) %>% mutate(population = "HapMap"), 
+      data.table::fread("relationships_w_pops_041510.txt", header = TRUE) %>% 
+        filter(population == "CEU") %>% 
+        select(FID, IID) %>% 
+        mutate(population = "HapMap"), 
       read.table("20100804.ALL.panel", header = FALSE, fill = TRUE) %>% 
         select(FID = V1, IID = V1, population = V2)
     ) %>% 
