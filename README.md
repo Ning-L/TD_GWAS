@@ -9,3 +9,8 @@ This directory contains course materials for TD GWAS.
 
 ## Required R Packages
 * dplyr, tidyr, scales, data.table, ggplot2
+
+## Toy Data
+The toy data is a subset of the freely [HapMap](https://www.sanger.ac.uk/resources/downloads/human/hapmap3.html) data, containing only CEU samples, a binary trait was simulated for only founders.
+
+Can be downloaded here: https://share-good.egid.fr/fop/VZfxQvAD/TD_GWAS_data.zip
