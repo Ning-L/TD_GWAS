@@ -26,3 +26,38 @@ Can be downloaded here: https://share-good.egid.fr/fop/VZfxQvAD/TD_GWAS_data.zip
 * HapMap sample population: `relationships_w_pops_041510.txt` (ftp://ftp-trace.ncbi.nih.gov/1000genomes/ftp/release/20100804/20100804.ALL.panel)
 * 1,000 genomes population: `20100804.ALL.panel` (ftp://ftp-trace.ncbi.nih.gov/1000genomes/ftp/release/20100804/20100804.ALL.panel)
 * 1,000 genomes population and super-population: `integrated_call_samples_v3.20130502.ALL.panel` (ftp://ftp-trace.ncbi.nih.gov/1000genomes/ftp/release/20130502/integrated_call_samples_v3.20130502.ALL.panel)
+
+## HapMap CEU Sample Extraction
+The CEU samples were extracted using following commands:
+
+```bash
+## HapMap plink format data
+wget https://ftp.ncbi.nlm.nih.gov/hapmap/genotypes/hapmap3_r3/plink_format/hapmap3_r3_b36_fwd.consensus.qc.poly.map.gz
+wget https://ftp.ncbi.nlm.nih.gov/hapmap/genotypes/hapmap3_r3/plink_format/hapmap3_r3_b36_fwd.consensus.qc.poly.ped.gz
+gunzip hapmap3_r3_b36_fwd.consensus.qc.poly.ped.gz
+gunzip hapmap3_r3_b36_fwd.consensus.qc.poly.map.gz
+
+## HapMap phenotype
+wget https://ftp.ncbi.nlm.nih.gov/hapmap/genotypes/hapmap3_r3/relationships_w_pops_041510.txt
+awk '($7=="CEU") {print$1,$2}' relationships_w_pops_041510.txt > hapmap_ceu_sample.txt
+
+## Extraction
+plink1.9 --file hapmap3_r3_b36_fwd.consensus.qc.poly --keep hapmap_ceu_sample.txt --make-bed --out hapmap_ceu
+```
+
+```r
+## Binary trait simulation
+pop <- data.table::fread("relationships_w_pops_041510.txt", header = TRUE)[population == "CEU", ]
+set.seed(20201106)
+sim_trait <- sample(1:2, size = nrow(pop[dad == mom]), prob = c(2/3, 1/3), replace = TRUE)
+fam_trait <- pop[, 1:5][dad == mom, pheno := sim_trait]
+fam_trait$pheno[is.na(fam_trait$pheno)] <- -9
+write.table(
+  fam_trait, 
+  file = "hapmap_ceu.fam", 
+  sep = "\t", 
+  col.names = FALSE, 
+  row.names = FALSE,
+  quote = FALSE
+)
+```
