@@ -17,18 +17,6 @@ editor_options:
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-
-## load packages
-library(dplyr)
-library(tidyr)
-library(scales)
-# library(data.table)
-library(ggplot2)
-theme_set(theme_light())
-
-## source functions
-source("viz_functions.R") # R functions for visualization
-
 ```
 
 # About The Data
@@ -63,6 +51,19 @@ rm TD_GWAS_data.zip
 Before start, please change directory to the folder containing files `hapmap_ceu.bim`, `hapmap_ceu.bed` and `hapmap_ceu.fam`. Make sure this Rmarkdown file is in the same directory as `hapmap_ceu.bim`.
 
 # Describing Data
+
+```{r}
+## load packages
+suppressMessages(library(dplyr))
+suppressMessages(library(tidyr))
+# suppressMessages(library(scales))
+# suppressMessages(library(data.table))
+suppressMessages(library(ggplot2))
+theme_set(theme_light())
+
+## source functions
+source("viz_functions.R") # R functions for visualization
+```
 
 ~~~
 wc -l hapmap_ceu.bim
@@ -442,6 +443,7 @@ After running PCA, you will get two files, one for the eigenvalues (`.eigenval`)
 * Which 1,000 genomes population is the closest to HapMap population? What is your conclusion?
 
 ```{r sample-pop-pca}
+## draw the first factorial plane
 data_pca <- data.table::fread("hapmap_1kg.fam", header = FALSE) %>% 
   select(IID = V2, pheno = V5) %>% 
   left_join(
@@ -498,9 +500,6 @@ check_ethnicity <- data.table::fread("hapmap_ceu_pca_1kg_adj_clean.fam", header 
   ) %>% 
   ungroup()
 
-inertia_pca <- data.table::fread("hapmap_1kg.eigenval", header = FALSE) %>%
-  mutate(y = V1 / sum(V1))
-
 ggplot(
   data = data_pca, aes(x = x, y = y, color = super_pop)
 ) +
@@ -520,13 +519,17 @@ ggplot(
   )
 # ggsave(filename = "figs/pop_structure.png", dpi = 200, height = 4.7, width = 6.3)
 
+## variation explained by first 10 PCs
+inertia_pca <- data.table::fread("hapmap_1kg.eigenval", header = FALSE) %>%
+  mutate(y = V1 / sum(V1))
+
 inertia_pca %>%
   mutate(x = seq_along(V1)) %>%
   ggplot(mapping = aes(x = x, y = y)) +
   geom_bar(stat = "identity", fill = scales::viridis_pal(begin = 0.5, end = 0.5)(1)) +
   labs(y = "Inertia", x = "Principal Components", title = "PCA Scree Plot") +
   scale_x_continuous(breaks = seq_len(10)) +
-  scale_y_continuous(expand = expansion(mult = c(0, 0.05)))
+  scale_y_continuous(label = scales::percent_format(), expand = expansion(mult = c(0, 0.05)))
 # ggsave(filename = "figs/pop_structure_inertia.png", dpi = 200, height = 4.7, width = 6.3)
 ```
 
@@ -679,7 +682,15 @@ left_join(
 res_glm_covar <- data.table::fread("res_glm_covar_chr22.assoc.logistic", header = TRUE)
 res_glm_covar
 
-res_glm_covar <- filter(res_glm_covar, TEST == "ADD", ! is.na(P))
+```
+
+```{r}
+res_glm_covar <- filter(res_glm_covar, TEST == "ADD", ! is.na(P)) %>% 
+  mutate(FDR = p.adjust(P, method = "BH")) %>% 
+  arrange(FDR)
+
+head(res_glm_covar)
+
 ```
 
 # Visualization
@@ -713,6 +724,6 @@ draw_manhattan(
 
 ```{r session-info, echo=FALSE, results="markup"}
 options("width" = 110)
-sessioninfo::session_info()
+sessionInfo()
 ```
 
