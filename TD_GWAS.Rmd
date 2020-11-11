@@ -16,8 +16,18 @@ editor_options:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(
+  echo = TRUE, 
+  cache.path = "figs"
+)
 ```
+
+# Practical Session Goals
+
+* Know key steps of GWAS data quality control (QC) and the principles behind
+* Know how to use PLINK to carry out QC steps
+* Know how to run association test via PLINK and interpret the results
+* Bonus: use the R-package ggplot2 for data visualization
 
 # About The Data
 
@@ -29,7 +39,9 @@ A binary trait was simulated only for founders and was added to the dataset.
 
 We refer hereafter this dataset as "hapmap_ceu".
 
-~~~
+# Dowaload Materials
+
+```bash
 ### build a directory for this TD
 mkdir TD_GWAS
 cd TD_GWAS
@@ -37,7 +49,7 @@ cd TD_GWAS
 ### download PLINK 1.9
 wget http://s3.amazonaws.com/plink1-assets/plink_linux_x86_64_20201019.zip
 unzip plink_linux_x86_64_20201019.zip
-rm plink_linux_x86_64_20201019.zip prettify LICENSE
+rm plink_linux_x86_64_20201019.zip
 
 ## For Mac http://s3.amazonaws.com/plink1-assets/plink_mac_20201019.zip 
 ## For Windows http://s3.amazonaws.com/plink1-assets/plink_win64_20201019.zip
@@ -46,9 +58,17 @@ rm plink_linux_x86_64_20201019.zip prettify LICENSE
 wget https://share-good.egid.fr/fop/VZfxQvAD/TD_GWAS_data.zip
 unzip TD_GWAS_data.zip
 rm TD_GWAS_data.zip
-~~~
+```
 
-Before start, please change directory to the folder containing files `hapmap_ceu.bim`, `hapmap_ceu.bed` and `hapmap_ceu.fam`. Make sure this Rmarkdown file is in the same directory as `hapmap_ceu.bim`.
+Please change directory to `TD_GWAS` if you are not already in the folder. Open the `TD_GWAS.Rmd` with Rstudio. Make sure the current working directory in Rstudio is `TD_GWAS`:
+
+```{r}
+getwd()
+```
+
+Otherwise, use the R function `setwd("path/to/your/TD_GWAS")` to change the working directory in Rstudio.
+
+Now we have everything in the same directory, let's start.
 
 # Describing Data
 
@@ -65,21 +85,26 @@ theme_set(theme_light())
 source("viz_functions.R") # R functions for visualization
 ```
 
-~~~
-wc -l hapmap_ceu.bim
-~~~
+**Note**: in order to execute directly system command via Rstudio, we'll use the R function `system(command = "")`. Here, system command should be enclosed by a pair of quotes. Type `?system` in R console to see the detail description about this function. 
+For Linux and Mac OS users, you can copy paste the command between quotes to run it in terminal. 
+For Windows user, the command may not work in Windows terminal and need to be adapted to Windows command, if you are not familiar with Windows terminal command, please execute all system commands via Rstudio with `system()`.
+
+**Quiz** 
+
+* How many SNPs?
+
+```{r}
+system(command = "wc -l hapmap_ceu.bim", intern = TRUE)
+```
+
+* How many individuals? How many males/females? How many cases/controls?
 
 ```{r}
 fam <- data.table::fread("hapmap_ceu.fam", header = FALSE)
 table("sex" = fam$V5, "status" = fam$V6)
 ```
 
-**Quiz** 
-
-* How many SNPs?
-* How many individuals? How many males/females? How many cases/controls?
-
-([clue](https://www.cog-genomics.org/plink/2.0/formats))
+(Clue: [PLINK file format](https://www.cog-genomics.org/plink/2.0/formats))
 
 # Quality Control
 
@@ -87,12 +112,14 @@ table("sex" = fam$V5, "status" = fam$V6)
 
 ### Sample Call Rate
 
-~~~
-./plink --bfile hapmap_ceu --missing --out hapmap_ceu
-~~~
+The PLINK command `--missing` calculates the missing rate, here we will check the call rate as `1 - missing rate`.
+
+```{r sample-cr-cmd}
+system(command = "./plink --bfile hapmap_ceu --missing --out hapmap_ceu")
+```
 
 ```{r sample-cr}
-sample_callrate_thres <- 0.99
+sample_callrate_thres <- 0.99 # the threshold of sample call rate, can be changed
 
 sample_miss <- data.table::fread(
   file = "hapmap_ceu.imiss", 
@@ -100,7 +127,7 @@ sample_miss <- data.table::fread(
 ) %>% 
   mutate(
     call_rate = 1 - F_MISS, 
-    lab = ifelse(call_rate < sample_callrate_thres, IID, NA)
+    lab = ifelse(call_rate < sample_callrate_thres, IID, NA) # label bad call rate sample
   )
 
 arrange(sample_miss, call_rate) %>% 
@@ -110,8 +137,8 @@ arrange(sample_miss, call_rate) %>%
   geom_text(aes(label = lab), size = 3, hjust = -0.2, na.rm = TRUE) +
   scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
   labs(x = "Samples", y = "Call Rate", title = "Sample Call Rate Check")
-# ggsave(filename = "figs/sample_cr.png", dpi = 200, height = 4.7, width = 6.3)
 
+## build a list to store samples to be excluded in each QC steps
 sample_to_exclude <- list(
   "sample_cr" = filter(sample_miss, !is.na(lab)) %>% 
     select(FID, IID) %>% 
@@ -123,11 +150,18 @@ sample_to_exclude <- list(
 
 * What's the possible reason when samples have a lot of missing genotypes?
 
+=> *e.g.*: low DNA quality, sequencing depth is the same for every samples
+
 ### Heterozygosity Check
 
-~~~
-./plink --bfile hapmap_ceu --het --out hapmap_ceu
-~~~
+The observed heterozygosity rate per sample was computed using the formula
+(Number of non-missing genotypes N(NM) - Number of homozygous genotypes O(Hom)) / N(NM).
+
+N(NM) and O(Hom) were obtained using the `--het` command in PLINK.
+
+```{r sample-het-cmd}
+system(command = "./plink --bfile hapmap_ceu --het --out hapmap_ceu")
+```
 
 ```{r sample-het}
 het_check <- data.table::fread(
@@ -137,10 +171,11 @@ het_check <- data.table::fread(
 ) %>% 
   mutate(het_rate = (N_NM - Ob_Hom) / N_NM)
 
-het_sd_thres <- 3
+het_sd_thres <- 3 # if sample's heterozygosity rate beyond 3 times the standard deviation of the average heterozygosity rate, considered as outliers. Can be changed.
 het_upper <- mean(het_check$het_rate) + sd(het_check$het_rate) * het_sd_thres
 het_lower <- mean(het_check$het_rate) - sd(het_check$het_rate) * het_sd_thres
 
+## draw call rate against heterozygosity rate
 inner_join(
   x = sample_miss,
   y = het_check, 
@@ -163,8 +198,8 @@ inner_join(
   scale_x_continuous(labels = scales::percent_format(accuracy = 0.1)) +
   scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
   labs(x = "Heterozygosity Rate", y = "Call Rate", title = "Heterozygosity Check")
-# ggsave(filename = "figs/sample_hrate.png", dpi = 200, height = 4.7, width = 6.3)
 
+## store samples to be excluded due to aberrant heterozygosity rate
 sample_to_exclude[["sample_het"]] <- filter(
   het_check, het_rate > het_upper | het_rate < het_lower
 ) %>% 
@@ -175,9 +210,13 @@ sample_to_exclude[["sample_het"]] <- filter(
 
 ### Gender Check
 
-~~~
-./plink --bfile hapmap_ceu --check-sex --out hapmap_ceu
-~~~
+The mean homozygosity rate across the X-chromosome was computed using the `--check-sex` command in PLINK.
+
+Male samples are expected to have a homozygosity rate greater than 0.8, female samples are expected to have a homozygosity rate less than 0.2. 
+
+```{r sample-gender-cmd}
+system(command = "./plink --bfile hapmap_ceu --check-sex --out hapmap_ceu")
+```
 
 ```{r sample-gender}
 gender_check <- data.table::fread(
@@ -201,8 +240,8 @@ inner_join(
   scale_x_continuous(breaks = seq(0, 1, 0.2)) +
   scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
   labs(x = "Homozygosity Rate", y = "Call Rate", title = "Gender Check")
-# ggsave(filename = "figs/sample_gender.png", dpi = 200, height = 4.7, width = 6.3)
 
+## store samples to be excluded due to gender discrepancy
 sample_to_exclude[["gender_dis"]] <- filter(gender_check, STATUS != "OK") %>% 
   select(FID, IID) %>% 
   mutate(QC = "Gender discrepancy")
@@ -212,18 +251,27 @@ sample_to_exclude[["gender_dis"]] <- filter(gender_check, STATUS != "OK") %>%
 
 * What's the possible reasons when a gender discrepancy is observed?
 
+=> *e.g.*: sample contamination, simple entry error when recording phenotype.
+
 ### Relatedness Check
 
-~~~
+In order to identify pairs of samples who look too similar to each other, pairwise IBD (identity by descent) was computed, using the `--genome` command in PLINK.
+
+Prior to the analysis, the dataset was pruned to exclude high-LD-regions, that is no variants with MAF < 0.01 and no pair of variants within 50 Kb have an r² > 0.2. (All these thresholds can be changed based on your prior knowledge of the data.)
+
+If samples are not supposed to be related, the expected pairwise $\hat{\pi}$ ("PI_HAT") should be less than 0.2.
+
+```{r sample-relatedness-cmd-0}
 ## prune high ld regions
-./plink --bfile hapmap_ceu --autosome --set-hh-missing --maf 0.01 --r2 --ld-window-r2 0.2 --ld-window-kb 50 --make-bed --out hapmap_ceu_pruned
+system(command = "./plink --bfile hapmap_ceu --autosome --set-hh-missing --maf 0.01 --r2 --ld-window-r2 0.2 --ld-window-kb 50 --make-bed --out hapmap_ceu_pruned")
 
 ## make sure allelic frequency is representative after pruning
-./plink --bfile hapmap_ceu_pruned --freq --make-bed --out hapmap_ceu_pruned
+system(command = "./plink --bfile hapmap_ceu_pruned --freq --make-bed --out hapmap_ceu_pruned")
 
 ## estimate IBD
-./plink --bfile hapmap_ceu_pruned --read-freq hapmap_ceu_pruned.frq --genome --min 0.2 --out hapmap_ceu_pruned_0
-~~~
+system(command = "./plink --bfile hapmap_ceu_pruned --read-freq hapmap_ceu_pruned.frq --genome --min 0.2 --out hapmap_ceu_pruned_0")
+
+```
 
 ```{r sample-relatedness-0}
 relatedness0 <- data.table::fread(
@@ -246,18 +294,21 @@ data.frame(table(cut(
 
 ```
 
-The HapMap dataset is known to contain parent-offspring relations. Let's check how many pairs with PI_HAT > 0.2 after removing non-founders.
+The HapMap dataset is known to contain parent-offspring relations. Not surprisingly, 97 pairs of samples were identified as first-degree relatives.
 
-~~~
+Let's check how many pairs with PI_HAT > 0.2 after removing non-founders.
+
+```{r sample-relatedness-cmd-1}
 ## exclude individuals with know parental ID
-./plink --bfile hapmap_ceu_pruned --filter-founders --make-bed --out hapmap_ceu_pruned_1
+system(command = "./plink --bfile hapmap_ceu_pruned --filter-founders --make-bed --out hapmap_ceu_pruned_1")
 
 ## update allelic frequency
-./plink --bfile hapmap_ceu_pruned_1 --freq --make-bed --out hapmap_ceu_pruned_1
+system(command = "./plink --bfile hapmap_ceu_pruned_1 --freq --make-bed --out hapmap_ceu_pruned_1")
 
 ## estimate IBD
-./plink --bfile hapmap_ceu_pruned_1 --read-freq hapmap_ceu_pruned_1.frq --genome --min 0.2 --out hapmap_ceu_pruned_1
-~~~
+system(command = "./plink --bfile hapmap_ceu_pruned_1 --read-freq hapmap_ceu_pruned_1.frq --genome --min 0.2 --out hapmap_ceu_pruned_1")
+
+```
 
 ```{r sample-relatedness-1}
 relatedness1 <- data.table::fread(
@@ -280,7 +331,7 @@ data.frame(table(cut(
 
 ```
 
-We'll keep the individual with higher call rate for each pair of related samples.
+There still one pair of samples has PI_HAT > 0.2, we'll keep the individual with higher call rate for each pair of related samples.
 
 ```{r sample-relatedness-2}
 related_samples <- select(relatedness1, FID1, IID1, FID2, IID2, PI_HAT) %>% 
@@ -300,6 +351,7 @@ related_samples <- select(relatedness1, FID1, IID1, FID2, IID2, PI_HAT) %>%
 
 select(related_samples, -contains("MISS"))
 
+## store samples to be excluded due to relatedness
 sample_to_exclude[["sample_relatedness"]] <- filter(related_samples, PI_HAT > 0.2) %>% 
   select(matches("FID|IID|call_rate")) %>% 
   unite(col = FID_IID1, FID1, IID1, sep = "_-_") %>% 
@@ -313,31 +365,40 @@ sample_to_exclude[["sample_relatedness"]] <- filter(related_samples, PI_HAT > 0.
 
 ### Population Structure
 
-**[DO NOT RUN]**
+The `hapmap_ceu` dataset was pruned using the following cut-offs:
+
+* variants call rate > 90%
+* MAF ≥ 0.01
+* HWE > 1e-04
+* samples call rate > 99%
+* heterozygosity rate within 3 times SD from the mean heterozygosity rate
+
+(All these thresholds can be changed)
 
 ```{r sample-pop-1}
 ## remove bad quality samples for PCA
 rbind(
   sample_to_exclude[["sample_cr"]],
-  sample_to_exclude[["sample_to_exclude"]]
+  sample_to_exclude[["sample_het"]]
 ) %>% 
   distinct(FID, IID) %>% 
   data.table::fwrite(
     file = "samples_toexclude_pca.txt",
     row.names = FALSE, 
     col.names = FALSE, 
-    quote = FALSE
+    quote = FALSE, 
+    sep = " "
   )
 
 ```
 
-~~~
-## prune HapMap data for PCA
-./plink --bfile hapmap_ceu --remove samples_toexclude_pca.txt --autosome --snps-only --maf 0.01 --hwe 0.0001 --geno 0.1 --make-bed --out hapmap_ceu_pca
-~~~
+```{r sample-pop-hapmap-cmd}
+## prune hapmap_ceu data for PCA
+system(command = "./plink --bfile hapmap_ceu --remove samples_toexclude_pca.txt --autosome --snps-only --maf 0.01 --hwe 0.0001 --geno 0.1 --make-bed --out hapmap_ceu_pca")
+```
 
 ```{r sample-pop-2}
-## extract HapMap SNPs
+## extract hapmap_ceu SNPs
 data.table::fwrite(
   data.table::fread("hapmap_ceu_pca.bim", header = FALSE)[, "V2"], 
   file = "hapmap_ceu_pca_snps.txt",
@@ -347,53 +408,85 @@ data.table::fwrite(
   quote = FALSE
 )
 
+## number of samples and variants ready to be merged with 1KG data
+hapmap_sample_pca <- scales::comma(as.numeric(
+  gsub(
+    pattern = "\\s+([0-9]+)\\s.*", 
+    replacement = "\\1", 
+    x = system("wc -l hapmap_ceu_pca.fam", intern = TRUE)
+  )
+))
+
+hapmap_variant_pca <- scales::comma(as.numeric(
+  gsub(
+    pattern = "\\s+([0-9]+)\\s.*", 
+    replacement = "\\1", 
+    x = system("wc -l hapmap_ceu_pca.bim", intern = TRUE)
+  )
+))
+
 ```
 
-**Attention:** huge data with >60G, please do not download if your disk memory is not allowed, download time is about 2 hours.
+After prunning, it remains `r hapmap_sample_pca` samples and `r hapmap_variant_pca` variants to be merged with 1,000 Genomes Project public data.
 
-~~~
-## get 1kg data under build 36
-wget ftp://ftp-trace.ncbi.nih.gov/1000genomes/ftp/release/20100804/20100804.ALL.panel
-wget ftp://ftp-trace.ncbi.nih.gov/1000genomes/ftp/release/20100804/ALL.2of4intersection.20100804.genotypes.vcf.gz
-./plink --vcf ALL.2of4intersection.20100804.genotypes.vcf.gz --make-bed --out ALL.2of4intersection.20100804.genotypes
-./plink --bfile ALL.2of4intersection.20100804.genotypes --set-missing-var-ids @:#[b37]\$1,\$2 --make-bed --out ALL.2of4intersection.20100804.genotypes_no_missing_IDs
-./plink --bfile ALL.2of4intersection.20100804.genotypes_no_missing_IDs --extract hapmap_ceu_pca_snps.txt --snps-only --make-bed --out 1kg_small
+**[DO NOT RUN FOLLOWING SECTIONS !]**
 
-## QC 1kg data
-./plink --bfile 1kg_small --mind 0.1 --make-bed --out 1kg_small
-./plink --bfile 1kg_small --geno 0.1 --maf 0.01 --hwe 0.0001 --make-bed --out 1kg_small
+**Attention:** huge 1,000 Genomes Project data with >60G, please do not download if your disk memory is not allowed, download time is about 2 hours.
 
-## extract 1kg variant from hapmap data
-awk '{print$2}' 1kg_small.bim > 1kg_pca_snps.txt
-./plink --bfile hapmap_ceu_pca --extract 1kg_pca_snps.txt --recode --make-bed --out hapmap_ceu_pca_1kg
+```{r get-merge-1kg, eval=FALSE}
+#######
+# Do not run
+#######
 
-## keep same build
-awk '{print$2,$4}' hapmap_ceu_pca_1kg.map > hapmap_build.txt
-./plink --bfile 1kg_small --update-map hapmap_build.txt --make-bed --out 1kg_small_clean
+### get 1kg data under build 36
+system(command = "wget ftp://ftp-trace.ncbi.nih.gov/1000genomes/ftp/release/20100804/20100804.ALL.panel") # 1kg phenotype
+system(command = "wget ftp://ftp-trace.ncbi.nih.gov/1000genomes/ftp/release/20100804/ALL.2of4intersection.20100804.genotypes.vcf.gz") # 1kg genotype
+system(command = "./plink --vcf ALL.2of4intersection.20100804.genotypes.vcf.gz --make-bed --out ALL.2of4intersection.20100804.genotypes") # transform VCF into plink format
+system(command = "./plink --bfile ALL.2of4intersection.20100804.genotypes --set-missing-var-ids @:#[b37]\$1,\$2 --make-bed --out ALL.2of4intersection.20100804.genotypes_no_missing_IDs") # optional, naming missing variant ID to chr:pos[b37]A1,A2, eg: chr1:10583[b37]G,A
+system(command = "./plink --bfile ALL.2of4intersection.20100804.genotypes_no_missing_IDs --extract hapmap_ceu_pca_snps.txt --snps-only --make-bed --out 1kg_small") # extract variants present in hapmap_ceu dataset
+
+
+### QC 1kg data
+system(command = "./plink --bfile 1kg_small --mind 0.1 --make-bed --out 1kg_small
+./plink --bfile 1kg_small --geno 0.1 --maf 0.01 --hwe 0.0001 --make-bed --out 1kg_small")
+
+## extract 1kg variant from hapmap_ceu data
+system(command = "awk '{print$2}' 1kg_small.bim > 1kg_pca_snps.txt")
+system(command = "./plink --bfile hapmap_ceu_pca --extract 1kg_pca_snps.txt --recode --make-bed --out hapmap_ceu_pca_1kg")
+
 
 ### merge
+## update 1kg base-pair positions based on hapmap_ceu
+system(command = "awk '{print$2,$4}' hapmap_ceu_pca_1kg.map > hapmap_build.txt")
+system(command = "./plink --bfile 1kg_small --update-map hapmap_build.txt --make-bed --out 1kg_small_clean")
+
 ## make sure reference allele is the same for variants
-awk '{print$2,$5}' 1kg_small_clean.bim > 1kg_ref-list.txt
-./plink --bfile hapmap_ceu_pca_1kg --reference-allele 1kg_ref-list.txt --make-bed --out hapmap_ceu_pca_1kg_adj
+system(command = "awk '{print$2,$5}' 1kg_small_clean.bim > 1kg_ref-list.txt")
+system(command = "./plink --bfile hapmap_ceu_pca_1kg --reference-allele 1kg_ref-list.txt --make-bed --out hapmap_ceu_pca_1kg_adj")
 
 ## resolve strand issues
-./plink --bfile 1kg_small_clean --bmerge hapmap_ceu_pca_1kg_adj.bed hapmap_ceu_pca_1kg_adj.bim hapmap_ceu_pca_1kg_adj.fam --make-bed --out hapmap_1kg
+system(command = "./plink --bfile 1kg_small_clean --bmerge hapmap_ceu_pca_1kg_adj.bed hapmap_ceu_pca_1kg_adj.bim hapmap_ceu_pca_1kg_adj.fam --make-bed --out hapmap_1kg")
 
 ## error when matching, flip variant strand
-./plink --bfile 1kg_small_clean --flip hapmap_1kg-merge.missnp --make-bed --out 1kg_small_flipped
+system(command = "./plink --bfile 1kg_small_clean --flip hapmap_1kg-merge.missnp --make-bed --out 1kg_small_flipped")
 
 ## try to merge again
-./plink --bfile 1kg_small_flipped --bmerge hapmap_ceu_pca_1kg_adj.bed hapmap_ceu_pca_1kg_adj.bim hapmap_ceu_pca_1kg_adj.fam --make-bed --out hapmap_1kg
+system(command = "./plink --bfile 1kg_small_flipped --bmerge hapmap_ceu_pca_1kg_adj.bed hapmap_ceu_pca_1kg_adj.bim hapmap_ceu_pca_1kg_adj.fam --make-bed --out hapmap_1kg")
 
 ## still error, exclude mis-matching variants in both datasets
-./plink --bfile 1kg_small_flipped --exclude hapmap_1kg-merge.missnp --make-bed --out 1kg_small_flipped_clean
-./plink --bfile hapmap_ceu_pca_1kg_adj --exclude hapmap_1kg-merge.missnp --make-bed --out hapmap_ceu_pca_1kg_adj_clean
+system(command = "./plink --bfile 1kg_small_flipped --exclude hapmap_1kg-merge.missnp --make-bed --out 1kg_small_flipped_clean")
+system(command = "./plink --bfile hapmap_ceu_pca_1kg_adj --exclude hapmap_1kg-merge.missnp --make-bed --out hapmap_ceu_pca_1kg_adj_clean")
 
-## merge 1kg with HapMap data
-./plink --bfile 1kg_small_flipped_clean --bmerge hapmap_ceu_pca_1kg_adj_clean.bed hapmap_ceu_pca_1kg_adj_clean.bim hapmap_ceu_pca_1kg_adj_clean.fam --make-bed --out hapmap_1kg
-~~~
+## merge 1kg with hapmap_ceu data
+system(command = "./plink --bfile 1kg_small_flipped_clean --bmerge hapmap_ceu_pca_1kg_adj_clean.bed hapmap_ceu_pca_1kg_adj_clean.bim hapmap_ceu_pca_1kg_adj_clean.fam --make-bed --out hapmap_1kg")
+
+```
 
 ```{r sample-pop-3, eval=FALSE}
+#######
+# Do not run
+#######
+
 ### extract SNPs in common
 intersect(
   data.table::fread("1kg_small_flipped_clean.bim", header = FALSE)[["V2"]],
@@ -408,11 +501,17 @@ intersect(
   )
 ```
 
-~~~
-./plink --bfile hapmap_1kg --extract hapmap_1kg_snps.txt --make-bed --out hapmap_1kg
-~~~
+```{r eval=FALSE}
+#######
+# Do not run
+#######
+
+### extract SNPs in common from merged dataset
+system(command = "./plink --bfile hapmap_1kg --extract hapmap_1kg_snps.txt --make-bed --out hapmap_1kg")
+```
 
 ```{r sample-pop-4, eval=FALSE}
+
 ### check palindromic variants
 data.table::fread("hapmap_1kg.bim", header = FALSE) %>%
   unite(alleles, V5, V6, remove = FALSE, sep = "") %>%
@@ -428,22 +527,27 @@ data.table::fread("hapmap_1kg.bim", header = FALSE) %>%
 
 ```
 
-~~~
+```{r eval=FALSE}
+#######
+# Do not run
+#######
+
 ### remove palindromic variants
-./plink --bfile hapmap_1kg --exclude hapmap_1kg_palindromic.txt --make-bed --out hapmap_1kg
+system(command = "./plink --bfile hapmap_1kg --exclude hapmap_1kg_palindromic.txt --make-bed --out hapmap_1kg")
 
 ### run PCA
-./plink --bfile hapmap_1kg --make-grm-bin --pca 10 --thread-num 10 --out hapmap_1kg
-~~~
+system(command = "./plink --bfile hapmap_1kg --make-grm-bin --pca 10 --thread-num 10 --out hapmap_1kg") # calculate only the first 10 PCs using 10 cores
 
-After running PCA, you will get two files, one for the eigenvalues (`.eigenval`) and another for the eigenvectors (`.eigenvec`). These two files are prepared in advance, named `hapmap_1kg.eigenval` and `hapmap_1kg.eigenvec` (available in the data directory). Eigenvector contains the 10 first principal components. Now, let's visualize the population structure.
+```
+
+After running PCA, you will get two files, one for the eigenvalues (`.eigenval`) and another for the eigenvectors (`.eigenvec`). These two files are prepared in advance, named `hapmap_1kg.eigenval` and `hapmap_1kg.eigenvec`. Eigenvector contains the 10 first principal components. Now, let's visualize the population structure.
 
 **Quiz** 
 
 * Which 1,000 genomes population is the closest to HapMap population? What is your conclusion?
 
 ```{r sample-pop-pca}
-## draw the first factorial plane
+### merge phenotype with eigenvectors
 data_pca <- data.table::fread("hapmap_1kg.fam", header = FALSE) %>% 
   select(IID = V2, pheno = V5) %>% 
   left_join(
@@ -469,22 +573,22 @@ data_pca <- data.table::fread("hapmap_1kg.fam", header = FALSE) %>%
   ) %>% 
   mutate(
     super_pop = ifelse(population == "HapMap", "HapMap", super_pop),
-    super_pop = relevel(factor(super_pop), ref = "HapMap")#,
-    # population = relevel(factor(population), ref = "HapMap")
+    super_pop = relevel(factor(super_pop), ref = "HapMap")
   ) %>% 
   rename(x = V3, y = V4) %>% 
   left_join(
-    y = stats::aggregate(cbind(x, y) ~ super_pop, data = ., mean) %>%
+    y = stats::aggregate(cbind(x, y) ~ super_pop, data = ., mean) %>% # calculate centroid of each super population
       `colnames<-`(paste0(colnames(.), c("", ".centroid", ".centroid"))),
     by = "super_pop"
-  ) %>%
-  mutate(dist = sqrt((x - x.centroid)^2 + (y - y.centroid)^2))
+  )
 
+### get the centroid of each super population in 1KG
 centre_pca <- data_pca %>%
   filter(super_pop != "HapMap") %>%
   select(IID, super_pop, contains("centroid")) %>%
   mutate_at(.vars = vars(IID, super_pop), .funs = as.character)
 
+### check which is the closest 1kg super population
 check_ethnicity <- data.table::fread("hapmap_ceu_pca_1kg_adj_clean.fam", header = FALSE) %>%
   select(FID = V1, IID = V2) %>%
   mutate_all(as.character) %>%
@@ -500,6 +604,11 @@ check_ethnicity <- data.table::fread("hapmap_ceu_pca_1kg_adj_clean.fam", header 
   ) %>% 
   ungroup()
 
+unique(check_ethnicity$ClosestPop[which(check_ethnicity$super_pop == "HapMap")])
+```
+
+```{r}
+### draw the first factorial plane
 ggplot(
   data = data_pca, aes(x = x, y = y, color = super_pop)
 ) +
@@ -517,7 +626,6 @@ ggplot(
     legend.position = "bottom", 
     legend.key.size = unit(0.5, units = "lines")
   )
-# ggsave(filename = "figs/pop_structure.png", dpi = 200, height = 4.7, width = 6.3)
 
 ## variation explained by first 10 PCs
 inertia_pca <- data.table::fread("hapmap_1kg.eigenval", header = FALSE) %>%
@@ -530,38 +638,51 @@ inertia_pca %>%
   labs(y = "Inertia", x = "Principal Components", title = "PCA Scree Plot") +
   scale_x_continuous(breaks = seq_len(10)) +
   scale_y_continuous(label = scales::percent_format(), expand = expansion(mult = c(0, 0.05)))
-# ggsave(filename = "figs/pop_structure_inertia.png", dpi = 200, height = 4.7, width = 6.3)
+
 ```
 
-```{r sample-exclusion}
-do.call("rbind", sample_to_exclude) %>% 
-  distinct(FID, IID) %>% 
-  data.table::fwrite(
-    file = "samples_excluded.txt",
-    sep = "\t", 
-    col.names = TRUE, 
-    row.names = FALSE,
-    quote = FALSE
-  )
-  
-```
+### Final Sample-based QC
 
-~~~
-## final sample-based plink
-./plink --bfile hapmap_ceu --filter-founders --remove samples_excluded.txt --snps-only --set-hh-missing --make-bed --out hapmap_ceu_good_samples
-~~~
+According to previous steps, now we know which samples have bad quality and should be excluded for variant-based QC. 
 
 **Quiz**
 
-* How many samples were excluded? Do you think sample with gender discrepancy should be removed?
+* How many samples were excluded? 
+
+```{r sample-exclusion}
+sample_excluded <- do.call("rbind", sample_to_exclude) %>% 
+  distinct(FID, IID)
+nrow(sample_excluded)
+
+data.table::fwrite(
+  sample_excluded,
+  file = "samples_excluded.txt",
+  sep = "\t", 
+  col.names = TRUE, 
+  row.names = FALSE,
+  quote = FALSE
+)
+  
+```
+
+* Do you think sample with gender discrepancy should be removed?
+
+=> if it's due to sample contamination, it should be excluded before downstream analysis; if it's due to phenotype file error, we can just correct the phenotype file and keep this sample in analysis.
+
+```{r sample-exclusion-cmd}
+## final sample-based QC
+system(command = "./plink --bfile hapmap_ceu --filter-founders --remove samples_excluded.txt --snps-only --set-hh-missing --make-bed --out hapmap_ceu_good_samples")
+```
 
 ## Variant-based QC
 
 ### Variant Call Rate
 
-~~~
-./plink --bfile hapmap_ceu_good_samples --missing --out hapmap_ceu_good_samples
-~~~
+Proportion of missing genotypes per variant was estimated using the `--missing` command in PLINK. Call rate was calculated as 1 - missing rate.
+
+```{r variant-cr-cmd}
+system(command = "./plink --bfile hapmap_ceu_good_samples --missing --out hapmap_ceu_good_samples")
+```
 
 ```{r variant-cr}
 variant_miss <- data.table::fread(
@@ -570,7 +691,9 @@ variant_miss <- data.table::fread(
 ) %>% 
   mutate(call_rate = 1 - F_MISS)
 
-variant_callrate_thres <- 0.95
+variant_callrate_thres <- 0.95 # threshold can be changed
+
+## visualize call rate per variant
 arrange(variant_miss, call_rate) %>% 
   ggplot(aes(x = seq_along(SNP), y = call_rate)) +
   geom_point(shape = 21) +
@@ -579,17 +702,19 @@ arrange(variant_miss, call_rate) %>%
   scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
   labs(x = "Variants", y = "Call Rate", title = "Variant Call Rate Check") +
   theme(axis.text.x = element_text(hjust = 1, angle = 10))
-# ggsave(filename = "figs/variant_cr.png", dpi = 200, height = 4.7, width = 6.3)
 
 ```
 
 ### Minor Allele Frequency Distribution
 
-~~~
-./plink --bfile hapmap_ceu_good_samples --freq --out hapmap_ceu_good_samples
-~~~
+The MAF were computed using the `--freq` command in PLINK.
+
+```{r variant-maf-cmd}
+system(command = "./plink --bfile hapmap_ceu_good_samples --freq --out hapmap_ceu_good_samples")
+```
 
 ```{r variant-maf}
+## visualize the allelic frequency distribution
 data.table::fread(
   file = "hapmap_ceu_good_samples.frq", 
   header = TRUE
@@ -602,15 +727,17 @@ data.table::fread(
   geom_bar(fill = scales::viridis_pal(begin = 0.5, end = 0.5)(1)) +
   labs(x = "MAF", y = "Number of variants", title = "MAF Distribution") +
   scale_y_continuous(labels = scales::comma_format(), expand = expansion(mult = c(0, 0.1)))
-# ggsave(filename = "figs/variant_maf.png", dpi = 200, height = 4.7, width = 6.3*1.2)
 
 ```
 
 ### Hardy-Weinberg Equilibrium
 
-~~~
-./plink --bfile hapmap_ceu_good_samples --hardy --out hapmap_ceu_good_samples
-~~~
+Hardy-Weinberg equilibrium (HWE) p-value was computed using the `--hardy` command in PLINK.
+
+```{r variant-hwe-cmd}
+system(command = "./plink --bfile hapmap_ceu_good_samples --hardy --out hapmap_ceu_good_samples")
+```
+
 
 ```{r variant-hwe}
 hwe <- data.table::fread(
@@ -618,7 +745,9 @@ hwe <- data.table::fread(
   header = TRUE
 )
 
-hwe_p_thres <- 0.0001
+hwe_p_thres <- 0.0001 # threshold can be changed, variants below this threshold will be excluded
+
+## visualize variants with hwe p < 1e-3
 hwe_significant <- filter(hwe, TEST == "ALL", P < hwe_p_thres * 10) %>% 
   arrange(P)
 ggplot(data = hwe_significant, aes(x = seq_along(SNP), y = P)) +
@@ -630,30 +759,36 @@ ggplot(data = hwe_significant, aes(x = seq_along(SNP), y = P)) +
     title = "HWE P-value Distribution", 
     subtitle = paste0("(truncated at p < ", hwe_p_thres * 10, ")")
   )
-# ggsave(filename = "figs/variant_hwe.png", dpi = 200, height = 4.7, width = 6.3)
   
 ```
 
-~~~
-## final data management at one time
-./plink --bfile hapmap_ceu \
---filter-founders \
---remove samples_excluded.txt \
---snps-only \
---set-hh-missing \
---geno 0.05 \
---hwe 0.0001 \
---recode \
---make-bed \
---out hapmap_ceu_clean
-~~~
+## Final Data Management At One Time
+
+```{r final-cmd}
+system(command = paste(
+  "./plink --bfile hapmap_ceu", 
+  "--filter-founders",
+  "--remove samples_excluded.txt",
+  "--snps-only",
+  "--set-hh-missing",
+  "--geno 0.05",
+  "--hwe 0.0001",
+  "--recode",
+  "--make-bed",
+  "--out hapmap_ceu_clean"
+))
+```
 
 # Association Test
 
-We will run association test only for chromosome 22 using logistic regression model.
+We will run association test only for chromosome 22 using logistic regression model with the `--logistic` command in PLINK.
+
+Optional: use `--covar` command to indicate the files containing covariables, use `--covar-name` to specify a subset of covariable by column name in covariable file. 
+
+Here, the first two columns of the covariable file `covars.txt` are family ID (FID) and sample ID (IID). The rest of columns are sex and the first 2 PCs, which will used as covariables in regression model.
 
 ```{r eval=FALSE}
-## use the first 2 PCs as covariables
+## extract covariables
 left_join(
   data.table::fread("hapmap_ceu_clean.fam", header = FALSE) %>% 
     mutate(V1 = as.character(V1)) %>% 
@@ -673,18 +808,29 @@ left_join(
 
 ```
 
-~~~
+```{r run-association-test}
 ### logistic regression with covariables
-./plink --bfile hapmap_ceu_clean --chr 22 --logistic --covar covars.txt --covar-name sex, PC1, PC2 --out res_glm_covar_chr22
-~~~
-
-```{r}
-res_glm_covar <- data.table::fread("res_glm_covar_chr22.assoc.logistic", header = TRUE)
-res_glm_covar
-
+system(command = "./plink --bfile hapmap_ceu_clean --chr 22 --logistic --covar covars.txt --covar-name sex, PC1, PC2 --out res_glm_covar_chr22")
 ```
 
+Detail description of association analysis' output: https://zzz.bwh.harvard.edu/plink/anal.shtml
+
 ```{r}
+## read regression results
+res_glm_covar <- data.table::fread(
+  "res_glm_covar_chr22.assoc.logistic", header = TRUE
+)
+res_glm_covar
+```
+
+If covariables are included in model, each variant will have the same number of rows as the number of covariables + 1.
+
+The `TEST` column indicates the tested variables. `ADD` corresponds to the tested variant under additive model. When there are NAs, it might due to all samples carry the same genotype for this variant, or the tested allele was not carried in samples (*e.g.*: in reference genome is A/G, but samples are A/T), the estimation was not completed.
+
+# Visualization
+
+```{r}
+## keep only rows of variants' estimation
 res_glm_covar <- filter(res_glm_covar, TEST == "ADD", ! is.na(P)) %>% 
   mutate(FDR = p.adjust(P, method = "BH")) %>% 
   arrange(FDR)
@@ -693,20 +839,33 @@ head(res_glm_covar)
 
 ```
 
-# Visualization
-
 ## Quantile-Quantile Plot
 
-```{r eval=FALSE}
+QQ plot draw the observed p-values from regression model versus the expected p-values of doing the same number of tests in a random dataset.
+
+In a GWAS, we expect to see only a few (some times none) variants are associated with the trait, so nearly all the p-values should follow the uniform distribution.
+
+When a large proportion of p-values depart away from the expected uniform distribution (points not line along the diagonal line), it usually indicates either poor data quality or population substructure not included in model.
+
+The genomic inflation factor $\lambda$ is a numerical summary of the departure from the uniform distribution, we expect to have a $\lambda$ close to 1.
+
+$$
+\lambda = \frac{median(\chi^2_{obs})}{median(\chi^2_{exp})} = \frac{median(qnorm(p/2)^2)}{0.456}
+$$
+
+```{r}
 ggqqplot(res_glm_covar[, "P"])
-# ggsave(filename = "figs/qq_plot.png", dpi = 200, height = 4.7, width = 6.3)
 ```
 
-![](figs/qq_plot.png)
+Following the QQ plot for genome-wide tested variants.
+
+![](figs/qq_plot.png){width=80%}
 
 ## Manhattan Plot
 
-```{r eval=FALSE}
+Manhattan plot was used to show p-values of all studied variants against their position in chromosomes.
+
+```{r}
 draw_manhattan(
   data = res_glm_covar,
   x = "BP",
@@ -714,9 +873,11 @@ draw_manhattan(
   chr = "CHR",
   label_y = "P-Value",
   alpha = 0.05
-)
-# ggsave(filename = "figs/manhattan_plot.png", dpi = 200, height = 4.7, width = 6.3*1.5)
+) +
+  scale_x_continuous(label = "22", breaks = 1)
 ```
+
+Following the manhattan plot for genome-wide tested variants.
 
 ![](figs/manhattan_plot.png)
 
